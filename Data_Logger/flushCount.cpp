@@ -3,6 +3,7 @@
 #include "flushCount.h"
 
 
+
 FlushCounter::FlushCounter(PinName switchA, PinName switchB):
 _pdFlushCounterA(new PinDetect (switchA)),
 _pdFlushCounterB(new PinDetect (switchB))
@@ -35,3 +36,37 @@ _pdFlushCounterB(new PinDetect (switchB))
 
 
 }
+
+
+
+void FlushCounter::_FlushCounterA_Pressed(void)
+{
+
+
+}
+
+void FlushCounter::_FlushCounterA_Released(void)
+{
+
+
+
+    
+}
+
+
+void FlushCounter::_FlushCounterB_Pressed(void)
+{
+
+
+    
+}
+
+
+void FlushCounter::_FlushCounterB_Released(void)
+{
+
+
+    
+}
+
+

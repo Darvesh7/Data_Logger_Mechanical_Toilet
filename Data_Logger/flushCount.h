@@ -19,10 +19,10 @@ class FlushCounter
 
     FlushCounter(PinName switchA, PinName switchB);
 
-    uint32_t getCount(void);
+    void getCount(void);
 
-    float getFlushCount(void);
-    float getUsesCount(void);
+    void getFlushCount(void);
+    void getUsesCount(void);
 
     float getServiceCount(void);
 
