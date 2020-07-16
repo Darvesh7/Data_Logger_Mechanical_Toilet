@@ -1,38 +1,75 @@
 #include "mbed.h"
-#include "PinDetect.h"
+#include "FATFileSystem.h"
+#include "SDBlockDevice.h"
+#include "ds3231.h"
+#include "RotaryEncoder.h"
+
+#include <stdio.h>
+#include <errno.h>
+#include <string>
+using std::string;
 
 
-DigitalOut myled (LED2);
-
-#define ENC_PPR 1
+#include "platform/mbed_retarget.h"
 
 
-PinDetect switchA (PA_0);
-PinDetect switchB (PA_1);
-
-int flushCount = 0;
-int useCount = 0;
-float speed = 0;
 #define distance 0.3
 
-int pulses = 0;
+
+InterruptIn switchA (PC_13);
+InterruptIn switchB (PA_1);
+Ds3231 rtc(PB_9, PB_8);
+SDBlockDevice sd(SPI_MOSI, SPI_MISO, SPI_SCK, PA_9);
+FATFileSystem fs("sd", &sd);
+RotaryEncoder encoder (PC_1,PC_0);
+
+time_t epoch_time;
+FILE * fd;
 
 
-Timer switchA_Timer, switchB_Timer, uses_Timer;
-Timeout Uses_Timeout;
+LowPowerTimer switchA_Timer;
+LowPowerTimeout  flush_end;
 
 
-void _switchA(void);
-void _switchB(void);
+Semaphore loggerSema(1);
+
+
+
+void start_flush(void);
+void end_flush(void);
 
 bool switchA_Pressed = false;
+
+Serial pc(USBTX, USBRX);
+
+void init_SD(void)
+{
+    pc.baud(115200);
+
+    sd.init();
+    fs.mount(&sd);
+
+   
+    fd = fopen("/sd/testdata.csv", "r+");
+    if (fd != nullptr)
+    {
+        pc.printf("SD Mounted - Ready");
+
+    }
+    else
+    {
+        fd = fopen("/sd/testdata.csv", "w+");
+        fclose(fd);
+        pc.printf("File Closed\r\n");
+        sd.deinit();
+        fs.unmount();
+        pc.printf("Creating new file - No existing file found\r\n");
+    }
+}
 
 
 void setup(void)
 {
-    _switchA();
-    _switchB();
-
 
 
 }
@@ -40,92 +77,116 @@ void setup(void)
 
 int main()
 {
-    setup();
+    init_SD();
+    setup(); 
+    switchA.fall(&start_flush);
+    switchA.rise(&end_flush);
+  
 
     while(true)
     {
-
-    sleep();    
-    if (switchA_Pressed) {
-
-    switchA_Pressed = false;
-    }
-
+        
 
     }
     
-
- 
-}
-
-void stop_flush(void) {
-
-
-  switchA_Pressed = true;
-
- 
-  Uses_Timeout.attach(&stop_flush, 0.1);
-    
-  
 }
 
 
+bool sdopened = false;
 
-
-
-void _switchAPressed(void)
+void logger(void const *name)
 {
-    switchA_Timer.start();
-    uses_Timer.start();
-    flushCount = flushCount +1;
- 
+    volatile int currenttime = 0;
+    volatile float voltage = 0.0;
+    volatile float current = 0.0;
+    volatile int pulses = 0;
+    volatile float rpm = 0.0;
+    float RpmRatioConversion = ((600/32)*(1/149.25));
+    volatile float power = 0.0;
+    volatile float torque = 0.0;
+
 
     
-    if(uses_Timer.read_ms() > 10000)
+    while(true)
     {
-        useCount = useCount + 1;
-        uses_Timer.reset();
+        
+        epoch_time = rtc.get_epoch();
+        if(loggerSema.try_acquire_until(20000))
+        {
+            if (!sdopened)
+            {
+                sd.init();
+                fs.mount(&sd);
+                fd = fopen("/sd/testdata.csv", "a");
+                fflush(stdout);
+                fprintf(fd, "%s\n", ctime(&epoch_time));
+                sdopened = (fd != nullptr);
+            }
+
+
+
+
+            string logline;
+
+          
+            //logline.append(to_string(voltage) + ",");
+            //logline.append(to_string(current) + ",");
+            //logline.append(to_string(power)  + ",");
+           
+
+            pc.printf("%s", logline.c_str());
+
+            if (fd != nullptr)
+            {
+                
+                fprintf(fd, " %s%s",",",logline.c_str());
+    
+            }
+
+            encoder.reset();
+            switchA_Timer.reset();
+            ThisThread::sleep_for(100);
+        
+            if(motor._MState == MFORWARD)
+            {
+                loggerSema.release();
+            }
+            else
+            {
+                if (fd != nullptr)
+                {
+                    fflush(stdout);
+                    fprintf(fd, "\r\n");
+                    fclose(fd);
+                    sd.deinit();
+                    fs.unmount();
+                    sdopened = false;
+                }
+            }
+        }
     }
-
-    Uses_Timeout.attach(&stop_flush, 0.2);
-    
- 
-}
-
-void _switchAReleased(void)
-{
-    speed = (distance / switchA_Timer.read());
-    switchA_Timer.reset();
-}
-
-void _switchBPressed(void)
-{
-    
-}
-
-void _switchBReleased(void)
-{
-    
 }
 
 
 
 
-void _switchA(void)
-{
-    switchA.mode(PullUp);
-    switchA.setAssertValue(0);
-    switchA.attach_asserted(&_switchAPressed);
-    switchA.attach_deasserted(&_switchAReleased);
-    switchA.setSampleFrequency();
-
+void start_flush(void)
+{           
+   
+    switchA_Timer.start();
+    loggerSema.release();
+    flush_end.attach(&end_flush, 4.0); //timeout - duration of flush    
 }
 
-void _switchB(void)
-{
-    switchB.mode(PullUp);
-    switchB.setAssertValue(0);
-    switchB.attach_asserted(&_switchBPressed);
-    switchB.attach_deasserted(&_switchBReleased);
-    switchB.setSampleFrequency();
+void end_flush(void)
+{        
+    switchA_Timer.stop(); 
+       
+    flush_end.attach(&end_flush, 0.1); //timeout - duration of flush
 }
+   
+
+
+
+
+

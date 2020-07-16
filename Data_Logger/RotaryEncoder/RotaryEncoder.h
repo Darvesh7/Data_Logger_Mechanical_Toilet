@@ -21,7 +21,7 @@ class RotaryEncoder
     DigitalIn pin1;
     DigitalIn pin2;
     int val;
-    Ticker ticker;
+    LowPowerTicker ticker;
 
     /**
      * Internal tick function.
