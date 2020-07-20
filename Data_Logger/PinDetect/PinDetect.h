@@ -131,7 +131,7 @@ class PinDetect {
 
 protected:
     DigitalIn   *_in;
-    Ticker      *_ticker;
+    LowPowerTicker      *_ticker;
     int         _prevState;
     int         _currentStateCounter;
     int         _sampleTime;
@@ -161,7 +161,7 @@ protected:
         _in = new DigitalIn( p );
         _in->mode( m );        
         _prevState = _in->read();        
-        _ticker = new Ticker;
+        _ticker = new LowPowerTicker;
     }
     
 public:
