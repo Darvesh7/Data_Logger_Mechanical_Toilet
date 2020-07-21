@@ -1,13 +1,16 @@
 #include "mbed.h"
 #include "RotaryEncoder.h"
 
+
 RotaryEncoder::RotaryEncoder(PinName channelA, PinName channelB, uint32_t val): 
+
+
 
 pin1(channelA), pin2(channelB), val(val) 
 {
     pin1.mode(PullUp);
     pin2.mode(PullUp);
-    ticker.attach_us(this, &RotaryEncoder::func_ticker, 500);
+    ticker.attach_us(this, &RotaryEncoder::func_ticker, 10000);
 }
 
 void RotaryEncoder::reset(void) 

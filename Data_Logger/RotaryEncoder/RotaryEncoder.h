@@ -18,8 +18,8 @@ class RotaryEncoder
     }
 
     private:
-    DigitalIn pin1;
-    DigitalIn pin2;
+    InterruptIn pin1;
+    InterruptIn pin2;
     int val;
     LowPowerTicker ticker;
 
