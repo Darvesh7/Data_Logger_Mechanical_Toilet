@@ -1,6 +1,6 @@
 #include "mbed.h"
 #include "motor.h"
-#include "RotaryEncoder.h"
+#include "QEI.h"
 #include "PinDetect.h"
 #include "states.h"
 #include "FATFileSystem.h"
@@ -23,27 +23,25 @@ Ds3231 rtc(PB_9, PB_8);
 SDBlockDevice sd(SPI_MOSI, SPI_MISO, SPI_SCK, PA_9);
 FATFileSystem fs("sd", &sd);
 
-InterruptIn Flush_button (PC_13);
-RotaryEncoder encoder(PC_1,PC_0);
-AnalogIn voltagePin(PA_0);
-
-
-
+InterruptIn Flush_switch (PC_13);
+PinDetect Reverse_switch (PA_0);
+QEI encoder(PC_1,PC_0,NC,64);
 
 
 time_t epoch_time;
-LowPowerTimer t;
-
+LowPowerTimer t,t_Return;
 
 //////////////////////////
 //////// Variables ///////
 /////////////////////////
-
+#define distance 0.05
 
 bool update_film_value = false;
 bool update_rpm_value = false;
+bool sdopened = false;
 
 int flush_count = 0;
+float speed = 0.0;
 
 
 //////////////////////////
@@ -52,14 +50,17 @@ int flush_count = 0;
 
 Semaphore motorSema(1);
 Semaphore loggerSema(1);
+Semaphore timestampSema(1);
 
 void SystemStates_thread(void const *name);
 void motorDrive_thread(void const *name); 
 void logger(void const *name);
+void timestamp(void const *name);
 
 Thread t1;
 Thread t2;
 Thread loggerThread;
+Thread timestampThread;
 
 EventFlags stateChanged;
 EventQueue queue;
@@ -70,16 +71,10 @@ FILE * fd;
 
 void start_flush(void);
 void end_flush(void);
-void setup_flush_button(void);
-void getTorque(void);
-void getRpm(void);
-void getVoltage(void);
-void getCurrent(void);
-void getPower(void);
+void start_returnFlush(void);
+void end_returnFlush(void);
+void Reverse_SW(void);
 
-void SetSysClock_PLL_HSE(void);
-
-void savetoSD(void);
 
 Serial pc(USBTX, USBRX);
 
@@ -114,11 +109,12 @@ void setup()
     pc.printf("SystemCoreClock is %d Hz\r\n", SystemCoreClock);
 
 
-    setup_flush_button();
+    Reverse_SW();
 
     t1.start(callback(motorDrive_thread, (void *)"MotorDriveThread"));
     t2.start(callback(SystemStates_thread, (void *)"SystemStateThread"));
     loggerThread.start(callback(logger, (void *)"DataLoggerThread"));
+    timestampThread.start(callback(timestamp,(void*)"TimeStampThread"));
 
     sysState_struct.sysMode = S_RUN;
   
@@ -151,25 +147,31 @@ int main()
     
     init_SD();
     setup(); 
-    Flush_button.fall(&start_flush);
-    Flush_button.rise(&end_flush);  
+    Flush_switch.fall(&start_flush);
+    Flush_switch.rise(&end_flush);  
 
 
     while (true) 
     {
         if(update_film_value)
         {
+            fprintf(fd, "Return Speed %s%f",",",speed);
+            fprintf(fd, "\r\n");
+            fflush(stdout);
+            fprintf(fd, "\r\n");
+            fclose(fd);
+            sd.deinit();
+            fs.unmount();
+            sdopened = false;
 
-            ThisThread::sleep_for(250); //important to have Delay - > Give SD time to flush data.
+            ThisThread::sleep_for(200); //important to have Delay - > Give SD time to flush data.
             update_film_value = false;
-
             LowPowerConfiguration();
-            RotaryEncoder encoder(PC_1,PC_0);
-            encoder.reset();
        
+            
             Ds3231 rtc(PB_9, PB_8);
             epoch_time = rtc.get_epoch();
-            ThisThread::sleep_for(250);
+            ThisThread::sleep_for(100);
 
 
             HAL_SuspendTick();
@@ -180,10 +182,10 @@ int main()
 
             HAL_ResumeTick();
         
-
+            
             setup();       
             pc.printf("exiting sleep mode");
-           
+        
              
         }          
    
@@ -191,30 +193,35 @@ int main()
 
 }
 
+void timestamp(void const *name)
+{
+    while(1)
+    {
+        timestampSema.acquire();
+        epoch_time = rtc.get_epoch();
+    }
+}
 
 
 
-bool sdopened = false;
 
 void logger(void const *name)
 {
     volatile int currenttime = 0;
-    volatile float voltage = 0.0;
-    volatile float current = 0.0;
     volatile int pulses = 0;
     volatile float rpm = 0.0;
     float RpmRatioConversion = ((600/32)*(1/149.25));
-    volatile float power = 0.0;
-    volatile float torque = 0.0;
-
+    epoch_time = rtc.get_epoch();   
 
     
     while(true)
     {
-        epoch_time = rtc.get_epoch();   
+        
        
         if(loggerSema.try_acquire_until(20000))
         {
+            timestampSema.release();
+
             if (!sdopened)
             {
                 sd.init();
@@ -243,9 +250,7 @@ void logger(void const *name)
 
             if (fd != nullptr)
             {
-                
                 fprintf(fd, " %s%s",",",logline.c_str());
-    
             }
 
             encoder.reset();
@@ -260,12 +265,7 @@ void logger(void const *name)
             {
                 if (fd != nullptr)
                 {
-                    fflush(stdout);
-                    fprintf(fd, "\r\n");
-                    fclose(fd);
-                    sd.deinit();
-                    fs.unmount();
-                    sdopened = false;
+                    
                 }
             }
         }
@@ -275,7 +275,7 @@ void logger(void const *name)
 
 void start_flush(void)
 {
-    //VoltageThread.start(getVoltage);
+   
     if(sysState_struct.sysMode == S_RUN)
     {
         if(gMotorAction == MA_Stop)
@@ -286,7 +286,8 @@ void start_flush(void)
             t.start();
             motorSema.release();
             loggerSema.release();
-            flush_end.attach(&end_flush, 4.0); //timeout - duration of flush
+            timestampSema.release();
+            //flush_end.attach(&end_flush, 4.0); //timeout - duration of flush
        
         }
     }
@@ -300,24 +301,33 @@ void end_flush(void)
         gMotorAction = MA_Stop;
         motorSema.release();
         t.stop(); 
+        speed = distance/(t_Return.read()/1000.0);
+        t_Return.reset();
        
         update_film_value = true;  
-        flush_end.attach(&end_flush, 1); //timeout - duration of flush
+        flush_end.attach(&end_flush, 0.01); //timeout - duration of flush
     }
    
 }
 
 
-void setup_flush_button(void) 
+
+void end_returnFlush(void)
 {
-    //Flush_button.mode(PullUp);
-    //Flush_button.attach_asserted(&start_flush);
-    //Flush_button.attach_deasserted(&end_flush);
-    //Flush_button.setSamplesTillAssert(10); // debounces 10 sample by
-    //Flush_button.setAssertValue(0);        // state of the pin
-    //Flush_button.setSampleFrequency();     // Defaults to 20ms.
-    //Flush_button.setSamplesTillHeld( 100 );
+    t_Return.start();
+
 }
+
+
+void Reverse_SW(void)
+{
+    Reverse_switch.mode(PullUp);
+    Reverse_switch.setAssertValue(0);
+    Reverse_switch.attach_deasserted(&end_returnFlush);
+    Reverse_switch.setSampleFrequency(5000);
+}
+
+
 
 
 void SystemStates_thread(void const *name) 
