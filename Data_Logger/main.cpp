@@ -23,7 +23,7 @@ Ds3231 rtc(PB_9, PB_8);
 SDBlockDevice sd(SPI_MOSI, SPI_MISO, SPI_SCK, PA_9);
 FATFileSystem fs("sd", &sd);
 
-InterruptIn Flush_switch (PC_13);
+PinDetect Flush_switch (PC_13);
 PinDetect Reverse_switch (PA_0);
 QEI encoder(PC_1,PC_0,NC,64);
 
@@ -74,6 +74,7 @@ void end_flush(void);
 void start_returnFlush(void);
 void end_returnFlush(void);
 void Reverse_SW(void);
+void encoder_sw(void);
 
 
 Serial pc(USBTX, USBRX);
@@ -110,6 +111,7 @@ void setup()
 
 
     Reverse_SW();
+    encoder_sw();
 
     t1.start(callback(motorDrive_thread, (void *)"MotorDriveThread"));
     t2.start(callback(SystemStates_thread, (void *)"SystemStateThread"));
@@ -147,14 +149,16 @@ int main()
     
     init_SD();
     setup(); 
-    Flush_switch.fall(&start_flush);
-    Flush_switch.rise(&end_flush);  
+   // Flush_switch.fall(&start_flush);
+   // Flush_switch.rise(&end_flush);  
 
 
     while (true) 
     {
         if(update_film_value)
         {
+            pc.printf("Return Speed %f\n",speed);
+
             fprintf(fd, "Return Speed %s%f",",",speed);
             fprintf(fd, "\r\n");
             fflush(stdout);
@@ -302,9 +306,9 @@ void end_flush(void)
         motorSema.release();
         t.stop(); 
         speed = distance/(t_Return.read()/1000.0);
+        update_film_value = true; 
         t_Return.reset();
-       
-        update_film_value = true;  
+          
         flush_end.attach(&end_flush, 0.01); //timeout - duration of flush
     }
    
@@ -325,6 +329,15 @@ void Reverse_SW(void)
     Reverse_switch.setAssertValue(0);
     Reverse_switch.attach_deasserted(&end_returnFlush);
     Reverse_switch.setSampleFrequency(5000);
+}
+
+void encoder_sw(void)
+{
+    Flush_switch.mode(PullUp);
+    Flush_switch.setAssertValue(0);
+    Flush_switch.attach_asserted(&start_flush);
+    Flush_switch.attach_deasserted(&end_flush);
+    Flush_switch.setSampleFrequency(5000);
 }
 
 
